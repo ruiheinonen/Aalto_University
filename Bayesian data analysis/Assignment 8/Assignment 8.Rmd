@@ -1,0 +1,252 @@
+---
+title: "BDA - Assignment 8"
+author: "Anonymous"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warnings=FALSE}
+library (rstan)
+library(loo)
+rstan_options (auto_write = TRUE) 
+options(mc.cores = parallel::detectCores()) 
+```
+
+# Exercise 1 
+
+## Separate model
+Although the assignment asked us to use uniform priors (i.e. the default in Stan), there was a separate message on behalf of the course staff that recommended using weakly informative priors instead. Therefore, I use $N \sim(100, 20^{2})$  as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations. 
+
+```{r message=FALSE, warning=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // number of data points
+  int<lower=0> K;                   // number of groups
+  int<lower=1,upper=K> x[N];        // group indicator
+  vector[N] y; 
+}
+parameters {
+  vector[K] mu;                     // group means
+  vector<lower=0>[K] sigma;         // group standard deviations 
+}
+model {
+  mu ~ normal(100, 20);             // weakly informative prior for mean
+  sigma ~ cauchy(0, 10);            // weakly informative prior for st.deviation
+  y ~ normal(mu[x], sigma[x]);      // ypred for each model with their own means and st.deviations
+}
+generated quantities {
+  real ypred; 
+  vector[N] log_lik;
+  ypred = normal_rng(mu[6], sigma[6]); // ypred for sixth model with its own mean and st.deviation
+  for(i in 1:N) {
+    log_lik[i] = normal_lpdf(y[i] | mu[x[i]], sigma[x[i]]); //log-likelihood
+  }
+}
+"
+
+factory_sep = list(N = nrow(factory)*ncol(factory),
+                   K = ncol(factory),
+                   x = rep(1:6, nrow(factory)),     # [1,6] as a bracket 
+                   y = c(t(factory[,1:6])))
+
+fit_sep = stan(model_code=factory_stan, data=factory_sep, refresh=0)   
+monitor(fit_sep)
+```
+
+
+## Pooled model 
+For the pooled model, each machine $j$ will have a common  mean $\mu$ and standard deviation $\sigma$ meaning that the parameter $\mu$ and $\sigma$ are now single real valued parameters instead of vectors. Once again I apply $N \sim(100, 20^{2})$ as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations.
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // numebr of data points
+  vector[N] y; 
+}
+parameters {
+  real mu;                          // Common mean
+  real<lower=0> sigma;              // Common standard deviation
+}
+model {
+  mu ~ normal(100, 20);             // weakly informative prior for mean
+  sigma ~ cauchy(0, 10);            // weakly informative prior for st.deviation
+  y ~ normal(mu, sigma);            // ypred for each model with their common means and st.deviations
+}
+generated quantities {
+  real ypred; 
+  vector[N] log_lik;
+  ypred = normal_rng(mu, sigma);    // ypred for sixth model with common mean and st.deviation
+  for (i in 1:N) {
+    log_lik[i] = normal_lpdf(y[i] | mu, sigma);
+  }
+}
+"
+
+length = length(c(factory$V1, factory$V2, factory$V3, factory$V4, factory$V5, factory$V6))
+factory_pooled = list(N=length,
+                      y = c(factory$V1, factory$V2, factory$V3, factory$V4, factory$V5, factory$V6))
+  
+fit_pool = stan(model_code=factory_stan, data=factory_pooled, refresh=0)  
+monitor(fit_pool)
+```
+
+
+## Hierarchical model 
+As informed by the course staff, applying hyperprios is preferred over uniform priors. Therefore, I will one again use $N \sim(100, 20^{2})$ as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations.
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // number of data points
+  int<lower=0> K;                   // number of groups
+  int<lower=1,upper=K> x[N];        // group indicator
+  vector[N] y; 
+}
+parameters {
+  real mu0;                         // prior mean
+  real<lower=0> sigma0;             // prior std
+  vector[K] mu;                     // group means
+  real<lower=0> sigma;              // common st.deviation 
+}
+model {
+  mu0 ~ normal(100,20);             // weakly informative prior for hierarchical mean (hyperprior)
+  sigma0 ~ cauchy(0, 10);           // weakly informative prior for hierarchical sigma (hyperprior)
+  mu ~ normal(mu0, sigma0);         // weakly informative prior for mean
+  sigma ~ cauchy(0,10);             // weakly informative prior for st.deviation
+  y ~ normal(mu[x], sigma);
+}
+generated quantities {
+  real ypred; 
+  real mu7;             
+  vector[N] log_lik;
+  // ypred for sixth model with individual means, common st.deviation and hyperprios
+  ypred = normal_rng(mu[6], sigma);  
+  // posterior od the seventh machine with individual means, common st.deviation and hyperprios
+  mu7 = normal_rng(mu0, sigma0);
+  for (i in 1:N)
+    log_lik[i] = normal_lpdf(y[i] | mu[x[i]], sigma); //log-likelihood
+}
+"
+
+factory_hier = list(N = nrow(factory)*ncol(factory),
+                    K = ncol(factory),
+                    x = rep(1:6, nrow(factory)),     # [1,6] as a bracket 
+                    y = c(t(factory[,1:6])))  
+
+fit_hier = stan(model_code=factory_stan, data=factory_hier, refresh=0)   
+monitor(fit_hier)
+```
+
+# Exercise 2 
+
+*Note 1*: As I use weakly informative prios, the resulting values for $\hat{k}$ and $\widehat{epld}_{loo}$ can vary from the example solutions
+
+*Note 2*: To highlight the answers, I report some of the highlighted values as approximations because the knit to pdf conversion always changes the results a bit as the code chunks get re-run. The strictly correct values are, however, displayed in the print tables. 
+
+```{r message=FALSE, warning=FALSE}
+loo_sep = loo(fit_sep, cores=2)
+print(loo_sep)
+plot(loo_sep)
+```
+
+- $PSIS-LOO$ $\widehat{elpd}_{loo}$ value for the separate model $\approx$ $-128.5$
+- For the separate model $\hat{k} > 0.7$ 
+
+```{r message=FALSE, warning=FALSE}
+loo_pool = loo(fit_pool, cores=2)
+print(loo_pool)
+plot(loo_pool)
+```
+
+
+- $PSIS-LOO$ $\widehat{elpd}_{loo}$ value for the pooled model $\approx$ $-131.0$
+- For the pooled model $\hat{k} < 0.5$ 
+
+
+```{r message=FALSE, warning=FALSE}
+loo_hier = loo(fit_hier, cores=2)
+print(loo_hier)
+plot(loo_hier)
+```
+
+- $PSIS-LOO$ $\widehat{elpd}_{loo}$ value for the hierarchical model $\approx$ $-127.0$
+- For the hierarchical model $\hat{k} < 0.7$ 
+
+
+# Exercise 3
+
+## Compute Effective number of parameters for the separate model
+
+*Note*: As I use weakly informative prios, the resulting values for $\hat{p}_{loo}$ can vary from the example solutions
+
+
+```{r message=FALSE, warning=FALSE}
+loo_sep = loo(fit_sep, r_eff=TRUE, cores=2)
+print(loo_sep)
+```
+
+
+- As we see from results, the $\hat{p}_{loo}$ for the separated model is $\approx$ $9.6$
+
+
+```{r message=FALSE, warning=FALSE}
+loo_pool = loo(fit_pool, cores=2)
+print(loo_pool)
+```
+
+- As we see from results, the $\hat{p}_{loo}$ for the pooled model is $\approx$ $2.1$ 
+
+```{r message=FALSE, warning=FALSE}
+loo_hier = loo(fit_hier, cores=2)
+print(loo_hier)
+```
+
+- As we see from results, the $\hat{p}_{loo}$ for the hierarchical model is $\approx$ $5.9$
+
+# Exercise 4
+
+According to Vehtari et al (2016) The estimated shape parameter $\hat{k}$ of the generalized Pareto distribution can be used to assess the reliability of the estimate:
+
+1. If $\hat{k} < \frac{1}{2}$, the variance of the raw importance ratios is finite, and the estimate converges quickly.
+
+2. If $\frac{1}{2} \leqslant \hat{k} < 1$, the variance of the raw importance ratios is infinite but the mean exists, and the convergence of the estimate is slower. If $\frac{1}{2} \leqslant \hat{k} < 0.7$ then we observe practically useful convergence rates and Monte Carlo error estimates, however, if $\hat{k} > 0.7$ we observe impractical convergence rates and unreliable Monte Carlo error estimates and the estimate may be biased (optimistic)
+
+3. If $\hat{k} \geqslant 1$, the variance and the mean of the raw ratios distribution do not exist. The convergence rate is close to zero and the estimate is likely to be biased (optimistic)
+
+As seen from the separate model results, the model is not reliable since $0.7 < \hat{k} \leqslant 1$ indicating that the convergence rate is close to zero and that he model is not reliable. 
+
+As seen from the pooled model results, all pareto $\hat{k}$ estimates are good $(\hat{k} < 0.5)$, indicating it converges quickly and that the model is reliable.
+
+As seen from the hierarchical model results, all pareto $\hat{k}$ estimates are good $(\hat{k} < 0.7)$. In more detail, approximately 93% of the data points have $\hat{\hat{k}}$ values $\hat{k} < \frac{1}{2}$ and 7%  have $\frac{1}{2} \leqslant \hat{k} < 0.7$. This indicates that the model converges fairly quickly and that the model is reliable.
+
+(Visualizations for the $\hat{k}$ values in section "Exercise 2")
+
+# Exercise 5 
+
+We can observe from the results that the $PSIS-LOO$ $\widehat{elpd}_{loo}$ values differ a bit between the three different models. According to these values, the hierachical model has the highest $PSIS-LOO$ $\widehat{elpd}_{loo}$ value at $\approx$ -127.0, indicating that this model should be selected, as higher expected log pointwise predictive density corresponds to smaller predictive error
+
+
+
+
+
+## References 
+Vehtari, A., Gelman, A., and Gabry, J. (2017). Practical Bayesian model evaluation using leave-one-out cross-validation and WAIC. Statistics and Computing. 27(5), 1413--1432. doi:10.1007/s11222-016-9696-4. arXiv preprint: http://arxiv.org/abs/1507.04544/
+
+
+

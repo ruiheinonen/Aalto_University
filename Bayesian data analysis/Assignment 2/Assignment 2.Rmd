@@ -1,0 +1,172 @@
+---
+title: "BDA - Assignment 2"
+author: "Anonymous"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 1
+---
+
+\listoftables
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(markmyassignment)
+exercise_path = 'https://github.com/avehtari/BDA_course_Aalto/blob/master/exercises/tests/ex2.yml'
+set_assignment(exercise_path)
+```
+
+```{r}
+library(aaltobda)
+data('algae')
+head(algae)
+
+algae_test = c(0,1,1,0,0,0)
+```
+
+# Exercise 1 a
+
+- Likelihood: 
+
+=> p(y | $\pi$) = $\pi$^y * (1 − $\pi$)^(n−y) 
+
+=> p(44 | $\pi$) = $\pi$^44 * (1 − $\pi$)^(274−44) 
+
+=> p(44 | $\pi$) = $\pi$^44 * (1 − $\pi$)^(230)
+              
+- Prior: 
+
+=>Beta($\pi$| $\alpha$, $\beta$) $\pi$^($\alpha$-1) * (1- $\pi$)^($\beta$-1) 
+
+=> Beta($\pi$| 2, 10) $\pi$^(2-1) * (1- $\pi$)^(10-1)
+             
+=> Beta($\pi$| 2, 10) $\pi$^(1) * (1- $\pi$)^(9)
+              
+- Posterior: 
+
+=> Beta($\pi$| $\alpha$ + y, $\beta$)  + n - y) 
+
+=> Beta($\pi$| 2 + 44, 10  + 274 - 44)
+
+=> Beta($\pi$| 46, 240)
+
+```{r}
+beta_point_est = function(prior_alpha, prior_beta, data) {
+  y = sum(data)
+  n.minus.y = sum(data < 1)
+  cat('y is',y, 'and n minus y is', n.minus.y, '\n')
+  
+  mean = sum(prior_alpha, y) / sum(prior_alpha, y, prior_beta, n.minus.y)
+  cat('The point estimate with Beta(2,10) prior is:', mean, '\n')
+}
+
+beta_point_est(2, 10, algae)
+
+beta_interval = function(prior_alpha, prior_beta, data, prob_interval) {
+  y = sum(data)
+  n.minus.y = sum(data < 1)
+
+  an = sum(prior_alpha, y)
+  bn = sum(prior_beta, n.minus.y)
+
+  lower_q = qbeta(0.05, an, bn)
+  upper_q = qbeta(0.95, an, bn)
+  
+  cat('The 90% interval estimate with Beta(2,10) prior is [', lower_q,',', upper_q, ']')
+}
+
+beta_interval(2, 10, algae, 0.9)
+```
+
+# Exercise 1 b 
+
+```{r}
+beta_low = function(prior_alpha, prior_beta, data, pi_0){
+  y = sum(data)
+  n.minus.y = sum(data < 1)
+
+  an = sum(prior_alpha, y)
+  bn = sum(prior_beta, n.minus.y)
+  
+  prob = pbeta(pi_0, an, bn)
+  cat('The probability that the proportion of monitoring sites with\n detectable algae levels',
+      'pi is smaller than pi = 0.2 with Beta(2,10) prior is:', prob,'\n', 
+      '(',prob*100,'%)')
+}
+
+beta_low(2, 10, algae, 0.2)
+```
+
+# Exercise 1 c
+
+## Assumptions
+
+ - We assume that the level of algae has exactly two outcomes: '0': no algae and '1': algae present (exchangeability)
+ - We assume that the algae levels n are conditionally independent given theta, with the probability of algae present equal to theta for all cases
+ - We assume theta to have prior uniform distribution [0,1]
+
+# Exercise 1 d
+
+```{r}
+beta_sensitivity = function(prior_alpha, prior_beta, data, prob_inteval) {
+  
+  cat('This is a function for building a sensitivity table')
+  cat('\n')
+  cat('###################################################')
+  cat('\n')
+  prior = prior_alpha / sum(prior_alpha, prior_beta)
+  prior2 = prior_alpha + prior_beta
+  cat('Prior alpha / (alpha + beta):',prior)
+  cat('\n')
+  cat('Prior alpha + beta:', prior2)
+  cat('\n')
+  
+  y = sum(data)
+  n.minus.y = sum(data < 1)
+  point_est = sum(prior_alpha, y) / sum(prior_alpha,y, prior_beta, n.minus.y)
+  cat('The point estimate:', point_est, '\n')
+  
+  an = sum(prior_alpha, y)
+  bn = sum(prior_beta, n.minus.y)
+  lower_q = qbeta(0.05, an, bn)
+  upper_q = qbeta(0.95, an, bn)
+  cat('The 90% interval estimate: [', lower_q,',', upper_q, '] \n')
+  cat('################################################### \n')
+}
+
+beta_sensitivity(16.6666667, 83.333333,algae, 0.9)
+```
+```{r}
+library(knitr) 
+library(kableExtra)
+
+df = matrix(c(0.5, 2, 0.375, '[ 0.1287564 , 0.6587386 ]',
+             0.1666667, 5, 0.160693, '[ 0.1260208 , 0.1981342 ]',
+             0.1666667, 10, 0.1607981, '[ 0.1264086 , 0.1979071 ]',
+             0.1666667, 20, 0.1609977, '[ 0.1271531 , 0.1974676 ]',
+             0.1666667, 100, 0.1622103, '[ 0.1319532 , 0.1945234 ]',
+             0.1666667, 200, 0.1631505, '[ 0.1360914 , 0.1918269 ]'), ncol = 4, byrow = TRUE)
+colnames(df) = c('alpha / alpha + beta', 'alpha + beta', 'Posterior median of theta', 
+                 '90% posterior interval for theta')
+df = as.table(df)
+
+kable(df, 'latex', booktabs = T, caption = 'Sensitivity analysis', linesep = "") %>%
+  kable_styling(latex_options = c('striped', 'hold_position', 'scale_down')) %>%
+  column_spec(2:5, bold = T) 
+
+cat('Table 1 shows that posterior inferences are not sensitive to prior distribution.\n',
+    'This means that the Bayesian analysis is robust to the change of prior.')
+```
+
+
+
+
+
+
+
+
+

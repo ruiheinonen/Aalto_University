@@ -1,0 +1,403 @@
+---
+title: "BDA - Assignment 7"
+author: "Anonymous"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(drowning)
+library (rstan)
+rstan_options (auto_write = TRUE) 
+options(mc.cores = parallel ::detectCores()) 
+```
+
+# Exercise 1. Linear model: drowning data with Stan
+
+## 1.
+
+There were two mistakes in the given Stan code. The errors are colored in \textcolor{red}{red} and the correction is colored in \textcolor{blue}{blue}
+
+ Firstly, this:\
+ parameters {\
+    &nbsp;&nbsp;real alpha;\
+    &nbsp;&nbsp;real beta;\
+    &nbsp;&nbsp;real\textcolor{red}{<upper=0>}sigma;\
+ }\
+  
+  should be written as:\
+  parameters {\
+    &nbsp;&nbsp;real alpha;\
+    &nbsp;&nbsp;real beta;\
+    &nbsp;&nbsp;real\textcolor{blue}{<lower=0>}sigma;\
+ }\
+ 
+ Secondly, this:\
+ generated quantities {\
+    &nbsp;&nbsp;real ypred;\                 
+    &nbsp;&nbsp;ypred = normal_rng(alpha + beta*\textcolor{red}{x}sigma);\
+ }
+ 
+ should be written as:\
+ generated quantities {\
+    &nbsp;&nbsp;real ypred;\                 
+    &nbsp;&nbsp;ypred = normal_rng(alpha + beta*\textcolor{blue}{xpred}sigma);;\
+ }\
+ 
+Below the full corrected Stan code
+
+```{r message=FALSE, warnings=FALSE}
+drowning = "
+data {
+  int<lower=0> N;           // number of data points
+  vector[N] x;              // observation year
+  vector[N] y;              // observation number of drowned
+  real xpred;               // prediction year
+}
+
+parameters {
+  real alpha;               // intercept
+  real beta;                // coefficients for predictors
+  real<lower=0> sigma;      // error scale
+}
+
+transformed parameters {
+  vector[N] mu;                  
+  mu = alpha + beta*x; 
+}
+
+model {
+  y ~ normal(mu, sigma);     // likelihood
+}
+
+generated quantities {
+  real  ypred;                  
+  ypred = normal_rng(alpha + beta*xpred, sigma);
+}
+"
+```
+
+## 2.
+
+I determine tau for the weakly informative prior $N(0, \tau^{2})$ by simulating 10000 rounds from normal distribution by changing the value of standard deviation so that 0.5% and 99.5% quantiles $\approx$ $\pm$ 69, Hence $Pr(-69 \leqslant beta \leqslant 69) = 0.99$
+
+```{r}
+sim = rnorm(1000000, 0, 26.7)
+print(quantile(sim, c(0.005, 0.995)))
+```
+
+Now, weakly informative prior $N(0,\tau^{2})$ is determined by $N(0,26.7^{2})$
+
+## 3.
+
+The weakly informative prior, $N(0,26.7^{2})$, is implemented in _model_ block of the below Stan code
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(drowning)
+
+stan_code = "
+data {
+  int<lower=0> N;           // number of data points
+  vector[N] x;              // observation year
+  vector[N] y;              // observation number of drowned
+  real xpred;               // prediction year
+}
+
+parameters {
+  real alpha;               // intercept
+  real beta;                // coefficients for predictors
+  real<lower=0> sigma;      // error scale
+}
+
+transformed parameters {
+  vector[N] mu;
+  mu = alpha + beta*x;
+}
+
+model {        
+  beta ~ normal(0, 26.7);    // weakly informative prior  
+  y ~ normal(mu, sigma);     // likelihood
+}
+
+generated quantities {
+  real ypred; 
+  ypred = normal_rng(alpha + beta*xpred, sigma);
+}
+"
+
+drowning_data =  list(N=nrow(drowning),
+                      x=drowning$year,
+                      y=drowning$drownings,
+                      xpred=2019)
+
+fit_drowning = stan(model_code=stan_code, data=drowning_data, refresh=0)   
+monitor(fit_drowning)
+```
+
+
+```{r fig.width=9, fig.height=3}
+par(mfrow=c(1,2))
+
+draws = as.data.frame(fit_drowning)[,41]
+hist(draws, breaks=40,  pch = 19, lwd=0.1, cex=0.4, xlim=c(25,225),
+     col='midnightblue', xlab='Posterior predictive histogram for year 2019')
+
+draws = as.data.frame(fit_drowning)[,2]
+hist(draws, breaks=40,  pch = 19, lwd=0.1, cex=0.4, xlim=c(-2,0.5),
+     col='midnightblue', xlab='beta')
+```
+
+Here we can see a almost exact match to the histograms provided in the assignment instructions. What is worth mentioning is that the given linear model with gaussian noise is not probably the best model here as the model output negative number of drownings. 
+
+# Exercise 2. Hierarchical model: factory data with Stan
+
+## Separate model 
+
+In the separate model, each machine $j$ will have its own mean $\mu_{j}$ and standard deviation $\sigma_{j}$. 
+
+Although the assignment asked us to use uniform priors (i.e. the default in Stan), there was a separate message on behalf of the course staff that recommended using weakly informative priors instead. Therefore, I use $N \sim(100, 20^{2})$  as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations. 
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // number of data points
+  int<lower=0> K;                   // number of groups
+  int<lower=1,upper=K> x[N];        // group indicator
+  vector[N] y; 
+}
+parameters {
+  vector[K] mu;                     // group means
+  vector<lower=0>[K] sigma;         // group standard deviations 
+}
+model {
+  mu ~ normal(100, 20);             // weakly informative prior for mean
+  sigma ~ cauchy(0, 10);            // weakly informative prior for st.deviation
+  y ~ normal(mu[x], sigma[x]);      // ypred for each model with their own means and st.deviations
+}
+generated quantities {
+  real ypred; 
+  ypred = normal_rng(mu[6], sigma[6]); // ypred for sixth model with its own mean and st.deviation
+}
+"
+
+factory_pooled = list(N = nrow(factory)*ncol(factory),
+                      K = ncol(factory),
+                      x = rep(1:6, nrow(factory)),     # [1,6] as a bracket 
+                      y = c(t(factory[,1:6])))  
+
+fit_sep = stan(model_code=factory_stan, data=factory_pooled, refresh=0)   
+monitor(fit_sep)
+```
+
+### Separate model i)
+
+```{r fig.width=8, fig.height=4}
+draws_sep_mu = as.data.frame(fit_sep)[,6]
+hist(draws_sep_mu, breaks=100,  pch = 19, lwd=0.1, cex=0.4,
+     main='Separate model', col='midnightblue', 
+     xlab='The posterior distribution of the mean of the quality measurements of the sixth machine')
+abline(v=mean(draws_sep_mu), col='firebrick', lwd=2.5)
+print(mean(draws_sep_mu))
+#axis(side=1, at=seq(0,200, 25))
+```
+
+We can notice that the R-hat value obtained for mu[6] with the stan model is close to 1 so we can assume that chains have converged and indeed use the obtained model results to plot the posterior distribution of mu[6]. By looking at the distribution, we can observe that it is quite narrow and. The median is approximately 89.
+
+### Separate model ii)
+
+```{r fig.width=8, fig.height=4}
+draws_sep_pred = as.data.frame(fit_sep)[,13]
+hist(draws_sep_pred, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Separate model', col='midnightblue', 
+     xlab='The predictive distribution for another quality measurement of the sixth machine')
+abline(v=mean(draws_sep_pred), col='firebrick', lwd=2.5)
+print(mean(draws_sep_pred))
+#axis(side=1, at=seq(-200,2500,50))
+```
+
+The R-hat value of the generated quantitity “ypred” is also close to 1 so we can assume that chains have converged and indeed use the obtained model results to plot the posterior distribution of "ypred".Here we see that the predictive distribution for another quality measurement of the sixth machine is even narrower and has even higher kurtosis than above. The distribution of the prediction mass is quite concentrated around the range of 50-125. The median is approximately 89.
+
+### Separate model iii)
+
+By using separate estimates for each of the quality measures, we assume that the experiments were performed independently and that each machine has its own model i.e. there is no link between the models. Without any quality measurement for the seventh machine, we cannot infer any posterior distribution of the mean of the quality measurements of this new machine.
+
+## Pooled model 
+
+For the pooled model, each machine $j$ will have a common  mean $\mu$ and standard deviation $\sigma$ meaning that the parameter $\mu$ and $\sigma$ are now single real valued parameters instead of vectors. However, I still use $N \sim(100, 20^{2})$  as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations.
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // numebr of data points
+  vector[N] y; 
+}
+parameters {
+  real mu;                          // Common mean
+  real<lower=0> sigma;              // Common standard deviation
+}
+model {
+  mu ~ normal(100, 20);             // weakly informative prior for mean
+  sigma ~ cauchy(0, 10);            // weakly informative prior for st.deviation
+  y ~ normal(mu, sigma);            // ypred for each model with their common means and st.deviations
+}
+generated quantities {
+  real ypred; 
+  ypred = normal_rng(mu, sigma);   // ypred for sixth model with common mean and st.deviation
+}
+"
+
+length = length(c(factory$V1, factory$V2, factory$V3, factory$V4, factory$V5, factory$V6))
+factory_pooled = list(N=length,
+                      y = c(factory$V1, factory$V2, factory$V3, factory$V4, factory$V5, factory$V6))
+  
+fit_pool = stan(model_code=factory_stan, data=factory_pooled, refresh=0)  
+monitor(fit_pool)
+```
+
+### Pooled model i)
+
+```{r fig.width=8, fig.height=4}
+draws_pool_mu = as.data.frame(fit_pool)[,1]
+hist(draws_pool_mu, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Pooled model', col='midnightblue', 
+     xlab='The posterior distribution of the mean of the quality measurements of the sixth machine')
+abline(v=mean(draws_pool_mu), col='firebrick', lwd=2.5)
+print(mean(draws_pool_mu))
+```
+
+For the pooled model, the obtained R-hat value for "mu" is also close to 1 and therefore the results obtained should be reliable. The posterior distribution of the mean of the quality measurements of the sixth machine resembles highly of normal distribution. The median is approximately 93.
+
+### Pooled ii)
+
+```{r fig.width=8, fig.height=4}
+draws_pool_pred = as.data.frame(fit_pool)[,3]
+hist(draws_pool_pred, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Pooled model', col='midnightblue', 
+     xlab='The predictive distribution for another quality measurement of the sixth machine')
+abline(v=mean(draws_pool_pred), col='firebrick', lwd=2.5)
+print(mean(draws_pool_pred))
+#axis(side=1, at=seq(0,200, 25))
+```
+
+Again, for the pooled model, the obtained R-hat value for "ypred" is also close to 1 and therefore ther results obtained should be reliable.
+
+For the predictive distribution for another quality measurement of the sixth machine with the pooled model, we see again that the distribution is really normally distributed with some outliers. However, as we want to spesifically identify the predictive distribution for another quality measurement of the sixth machine, this model seems rather useless as it makes no disparity between different machines and measurements. The median is approximately 93.
+
+
+### Pooled iii)
+
+By using the combined estimate averaging data from all quality measurement, we assume that the machines and measurements are quite similar and that the machines have no influence on quality measurements. Therefore, the prediction for the seventh machine simply returns global mean value, as the model again assumes the mean is shared among all machines. Subsuquently, the distribution of the mean of the quality measurements of the seventh machine is the same as the one obtained in question i) for the sixth machine. 
+
+
+## Hierarchical model 
+
+As informed by the course staff, applying hyperprios is preferred over uniform prior. Hence, I will again use $N \sim(100, 20^{2})$ as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations.
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // number of data points
+  int<lower=0> K;                   // number of groups
+  int<lower=1,upper=K> x[N];        // group indicator
+  vector[N] y; 
+}
+parameters {
+  real mu0;                         // prior mean
+  real<lower=0> sigma0;             // prior std
+  vector[K] mu;                     // group means
+  real<lower=0> sigma;              // common st.deviation 
+}
+model {
+  mu0 ~ normal(100,20);             // weakly informative prior for hierarchical mean (hyperprior)
+  sigma0 ~ cauchy(0, 10);           // weakly informative prior for hierarchical sigma (hyperprior)
+  mu ~ normal(mu0, sigma0);         // weakly informative prior for mean
+  sigma ~ cauchy(0,10);             // weakly informative prior for st.deviation
+  y ~ normal(mu[x], sigma);
+}
+generated quantities {
+  real ypred; 
+  real mu7;             
+  // ypred for sixth model with individual means, common st.deviation and hyperprios
+  ypred = normal_rng(mu[6], sigma);  
+  // posterior for the new seventh machine 
+  mu7 = normal_rng(mu0, sigma0);
+}
+"
+
+factory_pooled = list(N = nrow(factory)*ncol(factory),
+                      K = ncol(factory),
+                      x = rep(1:6, nrow(factory)),     # [1,6] as a bracket 
+                      y = c(t(factory[,1:6])))  
+
+fit_hier = stan(model_code=factory_stan, data=factory_pooled, refresh=0)   
+monitor(fit_hier)
+```
+
+### Hierarchical i)
+
+```{r fig.width=8, fig.height=4}
+draws_hier_mu = as.data.frame(fit_hier)[,8]
+hist(draws_hier_mu, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Hierarchical model',col='midnightblue', 
+     xlab='The posterior distribution of the mean of the quality measurements of the sixth machine')
+abline(v=mean(draws_hier_mu), col='firebrick', lwd=2.5)
+print(mean(draws_hier_mu ))
+```
+
+
+For the hierarchical model, the obtained R-hat value for "mu[6]" is also close to 1 and therefore ther results obtained should be reliable.
+
+For the posterior distribution of the mean of the quality measurements of the sixth machine with the hierarchical model we see that the distribution resembles a lot like the one with the pooled model. The difference is that the hierarchical model has fewer outliers and that the median is approximately 88, which is quite a bit less than in the pooled model and a lot closer to the non-pooled model. This can be explained by the fact that this model and the separate model take into account the specificities of the measurements of the sixth machine, that is, they account for machine spesific means.
+
+### Hierarchical ii)
+
+```{r fig.width=8, fig.height=4}
+draws_hier_pred = as.data.frame(fit_hier)[,10]
+hist(draws_hier_pred, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Hierarchical model',col='midnightblue', 
+     xlab='The predictive distribution for another quality measurement of the sixth machine')
+abline(v=mean(draws_hier_pred), col='firebrick', lwd=2.5)
+print(mean(draws_hier_pred))
+```
+
+Again, for the hierarchical model, the obtained R-hat value for "ypred" is also close to 1 and therefore ther results obtained should be reliable.
+
+For the predictive distribution for another quality measurement of the sixth machine with the hierarchical model we see that the distribution resembles a lot like the one with the pooled model. The difference is that the hierarchical model has fewer outliers and that is is more evenly distributed. The median is approximately 89, which again is less than in the pooled model and a lot closer to the non-pooled model.
+
+
+### Hierarchical iii)
+
+```{r}
+draws_hier_7 = as.data.frame(fit_hier)[,11]
+hist(draws_hier_7, breaks=100,  pch = 19, lwd=0.1, cex=0.4, 
+     main='Hierarchical model',col='midnightblue', 
+     xlab='The posterior distribution of the mean of the quality measurements of the seventh machine.')
+abline(v=mean(draws_hier_7), col='firebrick', lwd=2.5)
+print(mean(draws_hier_7))
+```
+
+Again, for the hierarchical model, the obtained R-hat value for "mu7" is also close to 1 and therefore ther results obtained should be reliable.
+
+The mean is approximately 94, which is almost equal to the one in the pooled model. However, the spread is a lot narrower in comparison to the above distribution. This is because here we sample from the posterior of the hierarchical prior.
+
+
+
+

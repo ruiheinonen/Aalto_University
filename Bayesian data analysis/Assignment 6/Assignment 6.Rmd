@@ -1,0 +1,80 @@
+---
+title: "BDA - Assignment 6"
+author: "Anonymous"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Exercise 1
+
+```{r message=FALSE}
+library (rstan)
+rstan_options (auto_write = TRUE) 
+options(mc.cores = parallel ::detectCores()) 
+library(aaltobda)
+data('bioassay')
+
+rho = 0.5
+mu1 = 0; sd1 = 2
+mu2 = 10; sd2 = 10
+mu = c(mu1, mu2)
+cov = matrix(c(sd1^2,sd1*sd2*rho, sd1*sd2*rho, sd2^2),2) 
+```
+
+```{r}
+bioassay <- "
+data {
+  int J;
+  int y[J];
+  int n[J];
+  vector[J] x;
+  matrix[2, 2] cov;
+  vector[2] mu;
+  }
+
+parameters {
+  vector[2] theta;
+  }
+
+model {
+  theta ~ multi_normal(mu, cov);
+  y ~ binomial_logit(n, theta[1] + theta[2] * x);
+  }
+"
+bioassay_data =  list(J = 4, 
+                      y = c(0, 1, 3, 5), 
+                      n = c(5, 5, 5, 5), 
+                      x = c(-0.86, -0.30, -0.05, 0.73),
+                      mu = mu,
+                      cov = cov)
+
+fit = stan(model_code=bioassay, data=bioassay_data)   
+monitor(fit)
+```
+
+# Exercise 2
+
+For convergence analysis, I use Rhat from package rstan. This package uses Rhat which is a potential scale reduction factor on split chains. The split chains method allows us to address the non-stationarity of chains. 
+
+From the above results we see that Rhat for parameters alpha and beta are both 1, which is the desired value at convergence. This means that as the number of draws increases the Rhat statistic approaches 1: $\displaystyle \lim_{n \to \infty} R=1$
+
+
+
+# Exercise 3 
+
+```{r}
+draws = as.data.frame(fit)[,1:2]
+plot(draws, type = 'p', xlim=c(-4,8), ylim=c(-10,40), pch = 19, lwd=0.1, cex=0.4,
+     col='midnightblue', main='Scatterplot of the draws', xlab='Alpha', ylab='Beta')
+```
+
+
+

@@ -1,0 +1,177 @@
+---
+title: "BDA - Assignment 8"
+author: "Anonymous"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+    toc_depth: 1
+---
+
+\listoftables
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warnings=FALSE}
+library (rstan)
+library(loo)
+library(tidyverse)
+library(knitr) 
+library(kableExtra)
+rstan_options (auto_write = TRUE) 
+options(mc.cores = parallel::detectCores()) 
+```
+
+# Exercise 1 
+
+## Hierarchical model
+
+As informed by the course staff, applying hyperprios is preferred over uniform priors. Therefore, I will one again use $N \sim(100, 20^{2})$ as the weakly informative prior for the means and $\tau \sim Cauchy(0, 10^{2})$ as the weakly informative prior for the standard deviations.
+
+*Note* As I use weakly informative priors, the resulting utilities can deviate from the model solutions a bit.
+
+```{r message=FALSE, warnings=FALSE}
+library('aaltobda')
+data(factory)
+
+factory_stan = "
+data {
+  int<lower=0> N;                   // number of data points
+  int<lower=0> K;                   // number of groups
+  int<lower=1,upper=K> x[N];        // group indicator
+  vector[N] y; 
+}
+parameters {
+  real mu0;                         // prior mean
+  real<lower=0> sigma0;             // prior std
+  vector[K] mu;                     // group means
+  real<lower=0> sigma;              // common st.deviation 
+}
+model {
+  mu0 ~ normal(100,20);             // weakly informative prior for hierarchical mean (hyperprior)
+  sigma0 ~ cauchy(0, 10);           // weakly informative prior for hierarchical sigma (hyperprior)
+  mu ~ normal(mu0, sigma0);         // weakly informative prior for mean
+  sigma ~ cauchy(0,10);             // weakly informative prior for st.deviation
+  y ~ normal(mu[x], sigma);
+}
+generated quantities {
+  real mu7;             
+  vector[K] ypred;
+  real ypred7;
+  // posterior od the seventh machine with individual means, common st.deviation and hyperprios
+  mu7 = normal_rng(mu0, sigma0);
+  for (i in 1:K){
+    ypred[i] = normal_rng(mu[i], sigma);
+  }
+  ypred7 = normal_rng(mu7, sigma);
+}
+"
+ 
+factory_hier = list(N = nrow(factory)*ncol(factory),
+                    K = ncol(factory),
+                    x = rep(1:6, nrow(factory)),     # [1,6] as a bracket 
+                    y = c(t(factory[,1:6])))  
+
+fit_hier = stan(model_code=factory_stan, data=factory_hier, refresh=0)   
+monitor(fit_hier)
+```
+
+```{r}
+utility = function(draws){
+  total = 0
+  for(i in draws){
+    if(i > 85){
+      total = total + 94
+    } 
+    else{
+      total = total - 106
+    }
+  }
+  total_mean = total/length(draws)
+  return(total_mean)
+}
+
+draws = as.data.frame(fit_hier, pars = c('ypred[1]', 'ypred[2]', 'ypred[3]', 
+                                         'ypred[4]', 'ypred[5]', 'ypred[6]'))
+machine1 = utility(draws[,1])
+machine2 = utility(draws[,2])
+machine3 = utility(draws[,3])
+machine4 = utility(draws[,4])
+machine5 = utility(draws[,5])
+machine6 = utility(draws[,6])
+
+df = matrix(c('machine1', machine1,
+              'machine2', machine2,
+              'machine3', machine3,
+              'machine4', machine4,
+              'machine5', machine5,
+              'machine6', machine6), ncol = 2, byrow = TRUE)
+colnames(df) = c('Machine', 'E[U]')
+df = as.table(df)
+kable(df, 'latex', caption = 'Expected utility of each machine', booktabs = TRUE) %>%
+  kable_styling(latex_options = c('striped', 'hold_position'), font_size = 12, full_width = F) 
+```
+
+$\\$
+$\\$
+
+# Exercise 2
+
+
+```{r message=FALSE, warning=FALSE}
+df = matrix(c('machine1', machine1,
+              'machine2', machine2,
+              'machine3', machine3,
+              'machine4', machine4,
+              'machine5', machine5,
+              'machine6', machine6), ncol = 2, byrow = TRUE)
+colnames(df) = c('Machine', 'E[U]')
+df = df[order(df[,2]),]
+df = cbind(Rank =  c(1,2,3,4,5,6), df)
+df = as.table(df)
+kable(df, 'latex', caption = 'Ranked expected utility of each machine', booktabs = TRUE) %>%
+  kable_styling(latex_options = c('striped', 'hold_position'), font_size = 12, full_width = F) 
+```
+
+
+A seen from the ranked utilities (worst to best), we can see that there are three separate clusters in terms of profitability.
+
+  1. Machine1 has negative expected utility and is therefore not profitable. 
+  2. Machine6, machine3 and machine5 are all profitable with expected utlity values ranging from $\approx$ 10 to $\approx$ 24
+  3. Machine 2 and machine 4 are by far the msot profitable ones with expected utilities of $\approx$ 65 and $\approx$ 74, respectively. 
+
+$\\$
+
+# Exercise 3 
+
+```{r message=FALSE, warning=FALSE}
+utility = function(draws){
+  total = 0
+  for(i in draws){
+    if(i > 85){
+      total = total + 94
+    } 
+    else{
+      total = total - 106
+    }
+  }
+  total_mean = total/length(draws)
+  return(total_mean)
+}
+
+draws = as.data.frame(fit_hier, pars = c('ypred7'))
+utility = utility(draws[,1])
+cat('Expected utility of the products of the seventh machine',utility)
+```
+
+# Exercise 4
+
+Based on the analysis, machine7 is profitable and and therefore the company should acquire the machine. Compared to other machines, machine7 is more protiable than machines 3, 5 and 6, but less profitable than machines 2 and 4.
+
+
+
+
+
+
